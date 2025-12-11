@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>DVD Logo — Bouncing</title>
+  <style>
+    html,body { margin:0; height:100%; background:#111; }
+    canvas { width:100%; height:100%; display:block; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+
+    function resize(){
+      canvas.width = innerWidth;
+      canvas.height = innerHeight;
+    }
+    window.addEventListener('resize',resize);
+    resize();
+
+    const logo = {
+      x: 100,
+      y: 100,
+      vx: 100, // slower speed
+      vy: 75,  // slower speed
+      w: 200,
+      h: 100
+    };
+
+    let last = performance.now();
+
+    // Load the real DVD logo image
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.src = 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/9b/DVD_logo.svg/320px-DVD_logo.svg.png';
+
+    function randomColor(){
+      return `hsl(${Math.random()*360},80%,50%)`;
+    }
+
+    function drawLogo(x,y,w,h,color){
+      if (img.complete) {
+        // tint the logo image by drawing it to an offscreen canvas
+        const off = document.createElement('canvas');
+        off.width = w;
+        off.height = h;
+        const offCtx = off.getContext('2d');
+
+        offCtx.drawImage(img,0,0,w,h);
+        offCtx.globalCompositeOperation = "source-atop";
+        offCtx.fillStyle = color;
+        offCtx.fillRect(0,0,w,h);
+
+        ctx.drawImage(off,x,y);
+      }
+    }
+
+    let currentColor = randomColor();
+
+    function loop(now){
+      const dt = (now - last)/1000; last = now;
+      logo.x += logo.vx * dt;
+      logo.y += logo.vy * dt;
+
+      let bounced = false;
+      if(logo.x < 0 || logo.x + logo.w > canvas.width){
+        logo.vx *= -1;
+        bounced = true;
+      }
+      if(logo.y < 0 || logo.y + logo.h > canvas.height){
+        logo.vy *= -1;
+        bounced = true;
+      }
+
+      if(bounced){
+        currentColor = randomColor();
+      }
+
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      drawLogo(logo.x, logo.y, logo.w, logo.h, currentColor);
+
+      requestAnimationFrame(loop);
+    }
+
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>

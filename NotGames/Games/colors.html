@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Color-Growing Image</title>
+<style>
+  :root { --bg:#0f1720; --card:#0b1220; --muted:#9aa3b2; --accent:#7cc0ff; }
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,Helvetica,Arial;color:#e6eef6;background:var(--bg)}
+  .wrap{display:grid;grid-template-columns:1fr 320px;gap:18px;padding:18px;height:100%}
+  .panel{background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));border-radius:12px;padding:12px;box-shadow:0 8px 30px rgba(2,6,23,0.6)}
+  canvas{width:100%;height:100%;display:block;border-radius:8px;background:#111}
+  .controls{display:flex;flex-direction:column;gap:10px}
+  label{font-size:13px;color:var(--muted)}
+  .row{display:flex;gap:8px;align-items:center}
+  input[type="range"]{width:100%}
+  button{background:var(--accent);border:0;padding:8px 10px;border-radius:8px;color:#042033;cursor:pointer;font-weight:600}
+  .muted{font-size:13px;color:var(--muted)}
+  small{color:var(--muted)}
+  .footer{font-size:12px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="panel" style="display:flex;flex-direction:column">
+    <canvas id="art"></canvas>
+  </div>
+
+  <div class="panel controls">
+    <div class="row">
+      <button id="startStop">Start</button>
+      <button id="download">Download</button>
+    </div>
+
+    <div>
+      <label>First Color</label>
+      <input id="firstColor" type="color" value="#ff0000" />
+      <label style="margin-left:8px;"><input id="randomFirstColor" type="checkbox" checked> Random first</label>
+      <div class="muted">Check "Random first" to ignore the picker and use a random seed color.</div>
+    </div>
+
+    <div>
+      <label>Pixel size (bigger = blockier)</label>
+      <input id="pixSize" type="range" min="1" max="32" value="6" />
+      <div class="muted"><span id="pixSizeVal">6</span> px</div>
+    </div>
+
+    <div>
+      <label>Noise amount</label>
+      <input id="noise" type="range" min="0" max="60" value="12" />
+      <div class="muted"><span id="noiseVal">12</span> (hue degrees ±)</div>
+    </div>
+
+    <div>
+      <label>Mode</label>
+      <select id="mode">
+        <option value="blend">Blend neighbors + noise</option>
+        <option value="wheel">Hue-rotate from left/top (color-wheel stepping)</option>
+      </select>
+    </div>
+
+    <div>
+      <label>Speed (cells per animation frame)</label>
+      <input id="speed" type="range" min="1" max="5000" value="400" />
+      <div class="muted"><span id="speedVal">400</span> cells/frame</div>
+    </div>
+
+    <div class="footer">
+      <div><small>Algorithm: fills grid row-major. Each cell's HSL derived from left & above neighbors and a small random change.</small></div>
+      <div style="margin-top:6px"><small>Tip: increase pixel size & noise for blocky painterly results; choose 'wheel' to get stronger hue banding.</small></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function createRng(seed){
+  let s = seed >>> 0;
+  if(!s) s = Math.floor(Math.random()*0xFFFFFFFF)>>>0;
+  return function(){ s|=0; s=s+0x6D2B79F5|0; let t=Math.imul(s^s>>>15,1|s); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }
+}
+
+function hslToRgb(h,s,l){
+  h/=360; function f(n){const k=(n+h*12)%12; const a=s*Math.min(l,1-l); return l-a*Math.max(Math.min(k-3,9-k,1),-1);}
+  const r=Math.round(f(0)*255), g=Math.round(f(8)*255), b=Math.round(f(4)*255);
+  return [r,g,b];
+}
+function rgbToCss(r,g,b){return "rgb("+r+","+g+","+b+")";}
+function rgbToHsl(r,g,b){r/=255;g/=255;b/=255;const max=Math.max(r,g,b),min=Math.min(r,g,b);let h=0,s=0,l=(max+min)/2;if(max!==min){const d=max-min;s=l>0.5?d/(2-max-min):d/(max+min);switch(max){case r:h=(g-b)/d+(g<b?6:0);break;case g:h=(b-r)/d+2;break;case b:h=(r-g)/d+4;break;}h*=60;}return {h,s,l};}
+
+const canvas=document.getElementById('art');
+const ctx=canvas.getContext('2d',{alpha:false});
+let width=1000,height=700;
+function resizeCanvas(){
+  const rect=canvas.parentElement.getBoundingClientRect();
+  width=Math.max(200,Math.floor(rect.width));
+  height=Math.max(200,Math.floor(rect.height));
+  const dpr=window.devicePixelRatio||1;
+  canvas.width=Math.floor(width*dpr);
+  canvas.height=Math.floor(height*dpr);
+  canvas.style.width=width+"px";
+  canvas.style.height=height+"px";
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize',()=>{resizeCanvas();drawGrid();});
+resizeCanvas();
+
+const pixRange=document.getElementById('pixSize'), pixSizeVal=document.getElementById('pixSizeVal');
+const noiseRange=document.getElementById('noise'), noiseVal=document.getElementById('noiseVal');
+const startStopBtn=document.getElementById('startStop');
+const downloadBtn=document.getElementById('download');
+const modeSel=document.getElementById('mode');
+const speedRange=document.getElementById('speed'), speedVal=document.getElementById('speedVal');
+const firstColorInput=document.getElementById('firstColor');
+const randomFirstColor=document.getElementById('randomFirstColor');
+
+pixRange.addEventListener('input',()=>{pixSizeVal.textContent=pixRange.value;});
+noiseRange.addEventListener('input',()=>{noiseVal.textContent=noiseRange.value;});
+speedRange.addEventListener('input',()=>{speedVal.textContent=speedRange.value;});
+
+let gridCols,gridRows,pixSize=+pixRange.value;
+let cells=[],rng=createRng(0),x=0,y=0,running=false,animationId=null;
+
+function rebuildGrid(){
+  pixSize=+pixRange.value;
+  gridCols=Math.ceil(width/pixSize);
+  gridRows=Math.ceil(height/pixSize);
+  cells=new Array(gridRows);
+  for(let r=0;r<gridRows;r++) cells[r]=new Array(gridCols);
+  x=0;y=0;
+}
+
+function seedInitial(){
+  rng=createRng(Math.floor(Math.random()*0xFFFFFFFF));
+  if(!randomFirstColor.checked){
+    try{
+      const hex=firstColorInput.value||"#ff0000";
+      const bigint=parseInt(hex.slice(1),16);
+      const r=(bigint>>16)&255,g=(bigint>>8)&255,b=bigint&255;
+      cells[0][0]=rgbToHsl(r,g,b);
+    }catch(e){
+      const h=Math.floor(rng()*360), s=0.6+rng()*0.4, l=0.35+rng()*0.25;
+      cells[0][0]={h,s,l};
+    }
+  } else {
+    const h=Math.floor(rng()*360), s=0.6+rng()*0.4, l=0.35+rng()*0.25;
+    cells[0][0]={h,s,l};
+  }
+}
+
+function computeFromNeighbors(cx,cy){
+  const mode=modeSel.value,n=+noiseRange.value;
+  const left=(cx>0)?cells[cy][cx-1]:null, top=(cy>0)?cells[cy-1][cx]:null;
+  if(!left&&!top) return cells[0][0];
+  const noise=(scale)=>(rng()*2-1)*scale;
+  if(mode==='wheel'){
+    const base=left||top;
+    let h=base.h+(rng()*2-1)*(n/2)+(left&&top?(top.h-left.h)/2:0);
+    h=(h%360+360)%360;
+    const s=Math.max(0,Math.min(1,base.s+noise(0.05)));
+    const l=Math.max(0.05,Math.min(0.95,base.l+noise(0.03)));
+    return {h,s,l};
+  } else {
+    let wLeft=left?1:0,wTop=top?1:0;
+    if(left&&top){wLeft=0.55; wTop=0.45;}
+    const total=wLeft+wTop;
+    const baseH=((left?left.h*wLeft:0)+(top?top.h*wTop:0))/total;
+    const baseS=((left?left.s*wLeft:0)+(top?top.s*wTop:0))/total;
+    const baseL=((left?left.l*wLeft:0)+(top?top.l*wTop:0))/total;
+    let h=baseH+(rng()*2-1)*(n*0.5);
+    h=(h%360+360)%360;
+    const s=Math.max(0,Math.min(1,baseS+(rng()*2-1)*(n/200)));
+    const l=Math.max(0,Math.min(1,baseL+(rng()*2-1)*(n/300)));
+    return {h,s,l};
+  }
+}
+
+function drawGrid(){
+  ctx.clearRect(0,0,width,height);
+  for(let r=0;r<gridRows;r++){
+    for(let c=0;c<gridCols;c++){
+      const cell=cells[r][c];
+      if(!cell) continue;
+      const [rcol,gcol,bcol]=hslToRgb(cell.h,cell.s,cell.l);
+      ctx.fillStyle=rgbToCss(rcol,gcol,bcol);
+      ctx.fillRect(c*pixSize,r*pixSize,pixSize,pixSize);
+    }
+  }
+}
+
+function stepCells(nCells){
+  for(let k=0;k<nCells;k++){
+    if(y>=gridRows){running=false;startStopBtn.textContent='Start';cancelAnimationFrame(animationId);return;}
+    if(!cells[y][x]){
+      if(!(x===0&&y===0)){
+        const color=computeFromNeighbors(x,y);
+        cells[y][x]=color;
+        const [rcol,gcol,bcol]=hslToRgb(color.h,color.s,color.l);
+        ctx.fillStyle=rgbToCss(rcol,gcol,bcol);
+        ctx.fillRect(x*pixSize,y*pixSize,pixSize,pixSize);
+      }
+    }
+    x++; if(x>=gridCols){x=0;y++;}
+  }
+}
+
+function animate(){
+  if(!running) return;
+  const perFrame=+speedRange.value;
+  stepCells(perFrame);
+  if(running) animationId=requestAnimationFrame(animate);
+}
+
+startStopBtn.addEventListener('click',()=>{
+  if(!running){
+    rebuildGrid();
+    seedInitial();
+    drawGrid();
+    running=true;
+    startStopBtn.textContent='Pause';
+    animationId=requestAnimationFrame(animate);
+  } else {
+    running=false;
+    startStopBtn.textContent='Start';
+    cancelAnimationFrame(animationId);
+  }
+});
+
+downloadBtn.addEventListener('click',()=>{
+  const link=document.createElement('a');
+  link.href=canvas.toDataURL('image/png');
+  link.download='color-grow.png';
+  link.click();
+});
+
+/* Regenerate on option changes only if running */
+modeSel.addEventListener('change',()=>{ if(!running) return; startStopBtn.click(); });
+firstColorInput.addEventListener('input',()=>{ if(!running) return; startStopBtn.click(); });
+randomFirstColor.addEventListener('change',()=>{ if(!running) return; startStopBtn.click(); });
+</script>
+</body>
+</html>
